@@ -491,7 +491,7 @@ class DatabaseHelper {
     Directory documentsDirectory = await getApplicationDocumentsDirectory();
     // await deleteDatabase(documentsDirectory.path);
     try {
-      String path = join(documentsDirectory.path, 'items1.db');
+      String path = join(documentsDirectory.path, 'exam25b.db');
       return await openDatabase(path, version: 1, onCreate: _onCreate);
     } catch (e) {
       print(e.toString());

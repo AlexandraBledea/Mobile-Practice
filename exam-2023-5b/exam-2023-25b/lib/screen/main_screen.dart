@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:exam_25a/screen/price_screen.dart';
+import 'package:exam_25b/screen/price_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
