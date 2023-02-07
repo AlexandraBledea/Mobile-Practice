@@ -19,10 +19,16 @@ import 'entity.dart';
 enum ConnectionStatus { CONNECTED, CONNECTING, DISCONNECTED }
 
 class LocalDatabaseRepository extends ChangeNotifier {
+  String updateEndpoint = "price";
+  String itemEndpoint = "item";
+  String itemsEndpoint = "items";
+  String categoriesEndpoint = "categories";
+  String discountedEndpoint = "discounted";
+
   List<Entity> items = [];
   List<String> categories = [];
 
-  late Future<List<Entity>> futureDiscountedItems = getDiscountedItems();
+  // late Future<List<Entity>> futureDiscountedItems;
   List<Entity> discountedItems = [];
   HashMap<String, bool> categoryJustAdded = HashMap<String, bool>();
 
@@ -32,17 +38,16 @@ class LocalDatabaseRepository extends ChangeNotifier {
   static final String urlServer = "http://10.0.2.2:2325";
 
   ValueNotifier<ConnectionStatus> connected =
-      ValueNotifier(ConnectionStatus.DISCONNECTED);
+  ValueNotifier(ConnectionStatus.DISCONNECTED);
 
   static final ValueNotifier<bool> notifier = ValueNotifier(false);
   static final log = Logger('ActivityService');
 
   StreamController<ConnectivityResult> connectivityController =
-      StreamController<ConnectivityResult>(sync: true);
+  StreamController<ConnectivityResult>(sync: true);
 
   LocalDatabaseRepository() {
-
-    futureDiscountedItems = getDiscountedItems();
+    // futureDiscountedItems = getDiscountedItems();
     futureCategories = getCategories();
     notifyListeners();
     for (String genre in categories) {
@@ -50,10 +55,10 @@ class LocalDatabaseRepository extends ChangeNotifier {
     }
   }
 
-  Future<List<Entity>> getDiscountedItems() async{
+  Future<Pair> getDiscountedItems() async {
     await checkConnectivity();
     if (connected.value == ConnectionStatus.CONNECTED) {
-      var url = Uri.parse(urlServer + "/discounted");
+      var url = Uri.parse("$urlServer/$discountedEndpoint");
       final response = await http.get(url);
 
       if (response.statusCode == 200) {
@@ -63,51 +68,59 @@ class LocalDatabaseRepository extends ChangeNotifier {
       } else {}
 
       discountedItems.sort((e1, e2) =>
-      (e1.price > e2.price || (e1.price == e2.price && e1.units > e2.units)) ? 1 : 0
-      );
+      (e1.price > e2.price || (e1.price == e2.price && e1.units > e2.units))
+          ? 1
+          : 0);
+
+      log.info("GET $urlServer/$discountedEndpoint");
 
       discountedItems = discountedItems.take(10).toList();
-      return discountedItems;
+      return Pair(discountedItems, ConnectionStatus.CONNECTED);
     } else {
       connected.value = ConnectionStatus.DISCONNECTED;
-      return [];
+      return Pair([], ConnectionStatus.DISCONNECTED);
     }
   }
 
   Future<List<String>> getCategories() async {
     await checkConnectivity();
     if (connected.value == ConnectionStatus.CONNECTED) {
-      connected.value = ConnectionStatus.CONNECTING;
-      var url = Uri.parse(urlServer + "/categories");
+      try {
+        connected.value = ConnectionStatus.CONNECTING;
+        var url = Uri.parse("$urlServer/$categoriesEndpoint");
 
-      final response = await http.get(url);
+        final response = await http.get(url);
 
-      if (response.statusCode == 200) {
-        connected.value = ConnectionStatus.CONNECTED;
-        categories = jsonDecode(response.body)
-            .map<String>((t) => t.toString())
-            .toList() as List<String>;
+        if (response.statusCode == 200) {
+          connected.value = ConnectionStatus.CONNECTED;
+          categories = jsonDecode(response.body)
+              .map<String>((t) => t.toString())
+              .toList() as List<String>;
 
-        log.info("GET " + urlServer + "/categories");
-      } else {}
+          log.info("GET $urlServer/$categoriesEndpoint");
+        } else {}
 
-      notifyListeners();
+        notifyListeners();
 
-      DatabaseHelper.instance.clearCategoriesTable();
+        await DatabaseHelper.instance.clearCategoriesTable();
 
-      for (String item in categories) {
+        for (String item in categories) {
           await DatabaseHelper.instance.add(item);
           categoryItems[item] = [];
-      }
+        }
 
-      return categories;
+        return categories;
+      } catch (e) {
+        return []; //TODO SERVER ERRORS CATCH
+      }
     } else {
-      log.info("Using existent genres offline");
+      log.info("Using existent categories offline");
       connected.value = ConnectionStatus.DISCONNECTED;
       categories = await DatabaseHelper.instance.getAll();
 
       for (String category in categories) {
-        var items = await DatabaseHelper.instance.getAllItemsByCategory(category);
+        var items =
+        await DatabaseHelper.instance.getAllItemsByCategory(category);
         categoryItems[category] = items;
       }
 
@@ -125,46 +138,53 @@ class LocalDatabaseRepository extends ChangeNotifier {
       connected.value = ConnectionStatus.DISCONNECTED;
     }
 
-    log.info("connected: " + connected.value.toString());
+    log.info("connected: ${connected.value}");
     return connected.value;
   }
 
   Future<List<Entity>> getItems(String category) async {
     await checkConnectivity();
     if (connected.value == ConnectionStatus.CONNECTED) {
-      connected.value = ConnectionStatus.CONNECTING;
+      try {
+        connected.value = ConnectionStatus.CONNECTING;
 
-      var url = Uri.parse(urlServer + "/items/" + category);
-      final response = await http.get(url);
+        var url = Uri.parse("$urlServer/$itemsEndpoint/$category");
+        final response = await http.get(url);
+        var items_2 = [];
+        if (response.statusCode == 200) {
+          items_2 = jsonDecode(response.body)
+              .map<Entity>((t) => Entity.fromJson(t))
+              .toList() as List<Entity>;
+        } else {}
 
-      if (response.statusCode == 200) {
-        items = jsonDecode(response.body)
-            .map<Entity>((t) => Entity.fromJson(t))
-            .toList() as List<Entity>;
-      } else {}
+        log.info("GET $urlServer/$itemsEndpoint/$category");
 
-      log.info("GET " + urlServer + "/items/" + category);
+        await DatabaseHelper.instance.clearItemsForCategory(category);
+        items.clear();
 
-      categoryItems[category] = items;
+        for (Entity item in items_2) {
+          var res = await DatabaseHelper.instance.addItems(EntityDTOWithID(
+            id: item.id,
+              name: item.name,
+              description: item.description,
+              category: item.category,
+              units: item.units,
+              price: item.price,
+              image: item.image));
+          print(res?.id);
+          items.add(res!);
+        }
 
-      DatabaseHelper.instance.clearItemsForCategory(category);
+        categoryItems[category] = items;
 
-      for (Entity item in items) {
-        await DatabaseHelper.instance.addItems(EntityDTO(
-            name: item.name,
-            description: item.description,
-            category: item.category,
-            units: item.units,
-            price: item.price,
-            image: item.image));
+        connected.value = ConnectionStatus.CONNECTED;
+        notifyListeners();
+        return items;
+      } catch(e){
+        return []; //TODO SERVER ERRORS CATCH
       }
-
-      connected.value = ConnectionStatus.CONNECTED;
-      notifyListeners();
-      return items;
-    }
-    else
-    {
+    } else {
+      log.info("Using existing items offline");
       connected.value = ConnectionStatus.DISCONNECTED;
       items = await DatabaseHelper.instance.getAllItemsByCategory(category);
       notifyListeners();
@@ -175,34 +195,40 @@ class LocalDatabaseRepository extends ChangeNotifier {
   Future<Pair> addActivity(EntityDTO item) async {
     await checkConnectivity();
     if (connected.value == ConnectionStatus.CONNECTED) {
-      connected.value = ConnectionStatus.CONNECTING;
+      try {
+        connected.value = ConnectionStatus.CONNECTING;
 
-      var url = Uri.parse(urlServer + "/item");
-      var response = await http.post(url,
-          headers: <String, String>{
-            'Content-Type': 'application/json; charset=UTF-8',
-          },
-          body: json.encode(item.toMap()));
+        var url = Uri.parse("$urlServer/$itemEndpoint");
+        var response = await http.post(url,
+            headers: <String, String>{
+              'Content-Type': 'application/json; charset=UTF-8',
+            },
+            body: json.encode(item.toMap()));
 
-      if (response.statusCode != 200) {
+        if (response.statusCode != 200) {
+          return Pair(response.body, ConnectionStatus.CONNECTED);
+        }
+
+        var res = await DatabaseHelper.instance.addItemsWithoutID(item);
+        if (res != null) {
+          add(item.category);
+          addItem(res);
+        }
+
+        connected.value = ConnectionStatus.CONNECTED;
+
+        log.info("POST $urlServer/$itemEndpoint");
+
+        print('Response status: ${response.statusCode}');
+        print('Response body: ${response.body}');
+
+        notifyListeners();
         return Pair(response.body, ConnectionStatus.CONNECTED);
+
       }
-
-      var res = await DatabaseHelper.instance.addItems(item);
-      if (res != null) {
-        add(item.category);
-        addItem(res);
+      catch(e){
+        return Pair(e.toString(), ConnectionStatus.DISCONNECTED);
       }
-
-      connected.value = ConnectionStatus.CONNECTED;
-
-      log.info("POST " + urlServer + "/item");
-
-      print('Response status: ${response.statusCode}');
-      print('Response body: ${response.body}');
-
-      notifyListeners();
-      return Pair(response.body, ConnectionStatus.CONNECTED);
     } else {
       notifyListeners();
       connected.value = ConnectionStatus.DISCONNECTED;
@@ -213,30 +239,33 @@ class LocalDatabaseRepository extends ChangeNotifier {
   Future<Pair> deleteActivity(int id) async {
     await checkConnectivity();
     if (connected.value == ConnectionStatus.CONNECTED) {
-      connected.value = ConnectionStatus.CONNECTING;
+      try {
+        connected.value = ConnectionStatus.CONNECTING;
 
-      var url = Uri.parse(urlServer + "/item/" + id.toString());
-      var response = await http.delete(url, headers: <String, String>{
-        'Content-Type': 'application/json; charset=UTF-8',
-      });
+        var url = Uri.parse("$urlServer/$itemEndpoint/$id");
+        var response = await http.delete(url, headers: <String, String>{
+          'Content-Type': 'application/json; charset=UTF-8',
+        });
 
-      if (response.statusCode != 200) {
+        if (response.statusCode != 200) {
+          return Pair(response.body, ConnectionStatus.CONNECTED);
+        }
+
+        connected.value = ConnectionStatus.CONNECTED;
+        log.info("DELETE $urlServer/$itemEndpoint/$id");
+
+        delete(id);
+        await DatabaseHelper.instance.removeItems(id);
+
+        print('Response status: ${response.statusCode}');
+        print('Response body: ${response.body}');
+
+        // notifyListeners();
         return Pair(response.body, ConnectionStatus.CONNECTED);
       }
-
-      connected.value = ConnectionStatus.CONNECTED;
-      log.info("DELETE " + urlServer + "/item/" + id.toString());
-
-
-      delete(id);
-      await DatabaseHelper.instance.removeItems(id);
-
-
-      print('Response status: ${response.statusCode}');
-      print('Response body: ${response.body}');
-
-      notifyListeners();
-      return Pair(response.body, ConnectionStatus.CONNECTED);
+      catch(e){
+        return Pair(e.toString(), ConnectionStatus.DISCONNECTED);
+      }
     } else {
       connected.value = ConnectionStatus.DISCONNECTED;
       return Pair("ok", ConnectionStatus.DISCONNECTED);
@@ -246,34 +275,52 @@ class LocalDatabaseRepository extends ChangeNotifier {
   Future<Pair> updateActivity(num price, int id) async {
     await checkConnectivity();
     if (connected.value == ConnectionStatus.CONNECTED) {
-      connected.value = ConnectionStatus.CONNECTING;
-      var url = Uri.parse("$urlServer/price");
-      Map<String, dynamic> data = Map();
-      data["id"] = id;
-      data["price"] = price;
+      try {
+        connected.value = ConnectionStatus.CONNECTING;
+        var url = Uri.parse("$urlServer/$updateEndpoint");
+        Map<String, dynamic> data = Map();
+        data["id"] = id;
+        data["price"] = price;
 
-      var response = await http.post(url,
-          headers: <String, String>{
-            'Content-Type': 'application/json; charset=UTF-8',
-          },
-          body: json.encode(data));
+        var response = await http.post(url,
+            headers: <String, String>{
+              'Content-Type': 'application/json; charset=UTF-8',
+            },
+            body: json.encode(data));
 
-      if(response.statusCode != 200){
+        if (response.statusCode != 200) {
+          return Pair(response.body, ConnectionStatus.CONNECTED);
+        }
+
+        connected.value = ConnectionStatus.CONNECTED;
+
+        log.info("POST $urlServer/$updateEndpoint");
+
+        bool found = false;
+        for(Entity item in items){
+          if(item.id == id){
+              found = true;
+          }
+        }
+        if(found){
+          var item = findById(id);
+          var res = await DatabaseHelper.instance
+              .updateItems(item);
+          update(res!);
+        }
+        else {
+          print("Item is not in database!!!!!");
+        }
+
+        print('Response status: ${response.statusCode}');
+        print('Response body: ${response.body}');
+
+        notifyListeners();
         return Pair(response.body, ConnectionStatus.CONNECTED);
       }
-
-      connected.value = ConnectionStatus.CONNECTED;
-
-      log.info("POST $urlServer/price");
-
-      update(id);
-
-
-      print('Response status: ${response.statusCode}');
-      print('Response body: ${response.body}');
-
-      return Pair(response.body, ConnectionStatus.CONNECTED);
-
+      catch(e){
+        return Pair(e.toString(), ConnectionStatus.DISCONNECTED);
+      }
     } else {
       connected.value = ConnectionStatus.DISCONNECTED;
       return Pair("ok", ConnectionStatus.DISCONNECTED);
@@ -283,34 +330,29 @@ class LocalDatabaseRepository extends ChangeNotifier {
   Future<void> add(String entity) async {
     await DatabaseHelper.instance.add(entity);
     bool found = false;
-    for(String category in categories){
-      if(category == entity){
+    for (String category in categories) {
+      if (category == entity) {
         found = true;
       }
     }
-    if(found == false) {
+    if (found == false) {
       categories.add(entity);
     }
-    notifyListeners();
+    // notifyListeners();
   }
 
   Entity findById(int id) {
     return items.firstWhere((element) => element.id == id);
   }
 
-  Future<void> update(int id) async {
-    Entity activity = findById(id);
-    var updatedActivity = null;
-    await DatabaseHelper.instance
-        .update(activity)
-        .then((value) => updatedActivity = value);
+  void update(Entity res) {
 
-    int index = items.indexWhere((element) => element.id == activity.id);
-    items[index] = updatedActivity!;
-    notifyListeners();
+    int index = items.indexWhere((element) => element.id == res.id);
+    items[index] = res;
+    // notifyListeners();
   }
 
-  void addItem(Entity entity){
+  void addItem(Entity entity) {
     items.add(entity);
     var category = entity.category;
     categoryItems[category]?.add(entity);
@@ -322,12 +364,10 @@ class LocalDatabaseRepository extends ChangeNotifier {
     var category = item.category;
 
     items.removeWhere((element) => element.id == activity_id);
-    categoryItems[category]?.removeWhere((element) => element.id == activity_id);
+    categoryItems[category]
+        ?.removeWhere((element) => element.id == activity_id);
     // notifyListeners();
   }
-
-
-
 }
 
 class DatabaseHelper {
@@ -336,6 +376,8 @@ class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._privateConstructor();
   static const tableNameCategories = 'categories';
   static const tableNameItems = 'items';
+
+  static final log = Logger('ActivityService');
 
   static Database? _database;
 
@@ -378,28 +420,34 @@ class DatabaseHelper {
       )
         ''');
 
+      log.info("Tables Created!");
     } catch (e) {
       print(e.toString());
     }
   }
 
-  Future<void> clearItemsForCategory(String category) async{
+  Future<void> clearItemsForCategory(String category) async {
     Database? db = await instance.database;
-      await db?.delete(
+    await db?.delete(
       tableNameItems,
       where: "category = ?",
-      whereArgs: [category],);
+      whereArgs: [category],
+    );
+    log.info("Items with category = $category -> deleted from database");
   }
 
-  Future<void> clearCategoriesTable() async{
+  Future<void> clearCategoriesTable() async {
     Database? db = await instance.database;
     db?.delete(tableNameCategories);
+
+    log.info("Items for category table -> deleted from database");
   }
 
   Future<void> clearTables() async {
     Database? db = await instance.database;
     db?.delete(tableNameCategories);
     db?.delete(tableNameItems);
+    log.info("Tables deleted from database");
   }
 
   String fromJson(Map<String, dynamic> json) {
@@ -418,6 +466,7 @@ class DatabaseHelper {
     } catch (e) {
       print(e.toString());
     }
+    log.info("Categories loaded from database");
     return entityList;
   }
 
@@ -425,7 +474,7 @@ class DatabaseHelper {
     Database? db = await instance.database;
 
     var possibleEntities =
-        await db?.query(tableNameCategories, where: 'id = ?', whereArgs: [id]);
+    await db?.query(tableNameCategories, where: 'id = ?', whereArgs: [id]);
 
     Entity? foundEntity = null;
     try {
@@ -436,6 +485,8 @@ class DatabaseHelper {
     } catch (e) {
       print(e.toString());
     }
+    log.info("Category with $id loaded from database");
+
     return foundEntity;
   }
 
@@ -448,7 +499,8 @@ class DatabaseHelper {
     try {
       int? id = await db?.insert(tableNameCategories, toMap(entity));
       if (id != null) {
-        return entity!;
+        log.info("Category added to database");
+        return entity;
       }
       return null;
     } catch (e) {
@@ -463,6 +515,7 @@ class DatabaseHelper {
 
     try {
       Entity? updatedActivities = await getById(entity.id);
+      log.info("Activity updated -> database");
       return updatedActivities!;
     } catch (e) {
       print(e.toString());
@@ -474,6 +527,7 @@ class DatabaseHelper {
     Database? db = await instance.database;
     try {
       await db?.delete(tableNameCategories, where: 'id = ?', whereArgs: [id]);
+      log.info("Category with $id removed from database");
     } catch (e) {
       print(e.toString());
     }
@@ -491,6 +545,8 @@ class DatabaseHelper {
     } catch (e) {
       print(e.toString());
     }
+    log.info("Items loaded from database");
+
     return entityList;
   }
 
@@ -504,6 +560,7 @@ class DatabaseHelper {
       for (int i = 0; i < entities.length; i++) {
         entityList.add(Entity.fromJson(entities[i]));
       }
+      log.info("Items for category = $genre -> loaded from database");
     } catch (e) {
       print(e.toString());
     }
@@ -514,7 +571,7 @@ class DatabaseHelper {
     Database? db = await instance.database;
 
     var possibleEntities =
-        await db?.query(tableNameItems, where: 'id = ?', whereArgs: [id]);
+    await db?.query(tableNameItems, where: 'id = ?', whereArgs: [id]);
 
     Entity? foundEntity = null;
     try {
@@ -525,6 +582,7 @@ class DatabaseHelper {
     } catch (e) {
       print(e.toString());
     }
+    log.info("Item with id $id -> loaded from database");
     return foundEntity;
   }
 
@@ -543,13 +601,15 @@ class DatabaseHelper {
     } catch (e) {
       print(e.toString());
     }
+    log.info("Category $category -> loaded from database");
     return foundEntity;
   }
 
-  Future<Entity?> addItems(EntityDTO entity) async {
+  Future<Entity?> addItems(EntityDTOWithID entity) async {
     Database? db = await instance.database;
     int? id = await db?.insert(tableNameItems, entity.toMap());
     if (id != null) {
+      log.info("Item added to database");
       return Entity(
           id: id,
           name: entity.name,
@@ -557,18 +617,36 @@ class DatabaseHelper {
           category: entity.category,
           image: entity.image,
           units: entity.units,
-          price: entity.price)!;
+          price: entity.price);
+    }
+    return null;
+  }
+
+  Future<Entity?> addItemsWithoutID(EntityDTO entity) async {
+    Database? db = await instance.database;
+    int? id = await db?.insert(tableNameItems, entity.toMap());
+    if (id != null) {
+      log.info("Item added to database");
+      return Entity(
+          id: id,
+          name: entity.name,
+          description: entity.description,
+          category: entity.category,
+          image: entity.image,
+          units: entity.units,
+          price: entity.price);
     }
     return null;
   }
 
   Future<Entity?> updateItems(Entity entity) async {
     Database? db = await instance.database;
-    db?.update(tableNameItems, entity.toMap(),
+    db?.update(tableNameItems, {'price': entity.price},
         where: 'id = ?', whereArgs: [entity.id]);
 
     try {
-      Entity? updatedActivities = await getById(entity.id);
+      Entity? updatedActivities = await getByIdItems(entity.id);
+      log.info("Item updated to database");
       return updatedActivities!;
     } catch (e) {
       print(e.toString());
@@ -580,6 +658,7 @@ class DatabaseHelper {
     Database? db = await instance.database;
     try {
       await db?.delete(tableNameItems, where: 'id = ?', whereArgs: [id]);
+      log.info("Item removed from database");
     } catch (e) {
       print(e.toString());
     }

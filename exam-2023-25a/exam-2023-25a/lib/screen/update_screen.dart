@@ -44,8 +44,6 @@ class UpdateScreen extends State<UpdateScreenState> {
 
   @override
   Widget build(BuildContext context) {
-    final storage = Provider.of<LocalDatabaseRepository>(context);
-
     var nameController = TextEditingController();
     nameController.text = widget._item.name;
 

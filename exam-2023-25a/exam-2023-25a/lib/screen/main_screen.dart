@@ -20,7 +20,6 @@ class MainScreen extends StatefulWidget {
 class MainScreenState extends State<MainScreen> {
   MainScreenState();
 
-  late Future<List<Entity>> activitiesByCategory;
   late String currentlySelectedCategory = "";
 
   var isDeleteLoading = false;
